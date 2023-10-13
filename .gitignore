@@ -4,3 +4,5 @@ ds1054z.egg-info/
 *.pyc
 __pycache__
 docs/_build
+ds1054z/deprecated/
+*.png
