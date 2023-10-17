@@ -1,47 +1,18 @@
 from jvframework.logger import log
 import asyncio
-import json
 import ds1054z
-import time
 import os
-import io
-import csv
-from jvframework.supervisor import Supervisor, start_supervisor, to_mqtt, from_mqtt
-from PIL import Image, ImageOps, ImageEnhance, ImageFile
+import sys
+import ds1054z.api as dapi
+from jvframework.supervisor import start_supervisor
+from jvframework.misc import hdd_share, ssd_share, ensure_dir
+from PIL import ImageFile
 
 ds = ds1054z.DS1054Z("10.0.1.106")
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
-def normpath(path):
-    sep = os.path.sep
-    path = path.replace("/", sep).replace("\\", sep)
-    parts = []
-    for part in path.split(sep):
-        if part == "..":
-            if parts:
-                parts.pop()
-        elif part and part != ".":
-            parts.append(part)
-    new_path = sep.join(parts)
-    if path.startswith(sep):
-        new_path = sep + new_path
-    return new_path
-
-
-def hdd_share(path):
-    if path.startswith("H:"):
-        path = "/mnt/hdd_share" + path[2:]
-    return path
-
-
-def ssd_share(path):
-    if path.startswith("S:"):
-        path = "/mnt/ssd_share" + path[2:]
-    return path
-
-
-async def do_work(api, *args, **kwargs):
+async def do_work(api, *args, logger=None, **kwargs):
     try:
         log("Doing work:", api, args, kwargs)
 
@@ -75,7 +46,7 @@ async def do_work(api, *args, **kwargs):
             attr = args[0]
             log("hasattr", (attr, hasattr(ds, attr)))
             return (attr, hasattr(ds, attr))
-        if api == "save_waveform":
+        if api in ["save_waveform", "save_waveform_simple"]:
             """
             Save waveform to file pulse_waveform_{channel}.csv
             args[0]: work_dir
@@ -84,26 +55,10 @@ async def do_work(api, *args, **kwargs):
             assert (
                 len(args) >= 2
             ), "Require channel and path arguments for saving waveform"
-            work_dir = hdd_share(normpath(args[0]))
+            work_dir = hdd_share(args[0])
+            ensure_dir(work_dir)
             channels = args[1:]
-            
-            wave_file = os.path.join(*[work_dir, f"pulse_waveforms.csv"])
-            log(f"Writing {len(channels)} waveforms to {work_dir}")
-            if not os.path.exists(work_dir):
-                log("Path {} does not exist, creating".format(work_dir))
-                os.makedirs(work_dir)
-            with open(
-                wave_file,
-                mode="w",
-                newline="",
-            ) as f:
-                csv_writer = csv.writer(f)
-                log("Opened file for writing:", wave_file)
-                csv_writer.writerow(ds.waveform_time_values_decimal)
-                for channel in channels:
-                    waveform = ds.get_waveform_samples(channel)
-                    csv_writer.writerow(waveform)
-            return True
+            return dapi.save_waveform_simple(ds, work_dir, channels)
         if api == "trigger_single":
             ds.single()
         if api in ["save_note", "save_notes"]:
@@ -113,13 +68,11 @@ async def do_work(api, *args, **kwargs):
             args[1]: note
             """
             assert len(args) >= 2, "Require text and path arguments for saving note"
-            work_dir = hdd_share(normpath(args[0]))
+            work_dir = hdd_share(args[0])
+            ensure_dir(work_dir)
             note = args[1]
             note_file = os.path.join(*[work_dir, "note.txt"])
             log(f"Writing note of length {len(note)} to {work_dir}")
-            if not os.path.exists(work_dir):
-                log("Path {} does not exist, creating".format(work_dir))
-                os.makedirs(work_dir)
             with open(
                 note_file,
                 mode="w",
@@ -127,58 +80,86 @@ async def do_work(api, *args, **kwargs):
                 log("Opened file for writing:", note_file)
                 f.write(note)
             return True
-        if api in ["save_screenshot", "save_screen", "screenshot"]:
+        if api in ["screenshot_simple", "screenshot"]:
             """
             Save screenshot to file pulse_waveform_screenshot.png
             args[0]: work_dir
             """
             # formatting the filename
-            work_dir = hdd_share(normpath(args[0]))
+            work_dir = hdd_share(args[0])
+            ensure_dir(work_dir)
             filename = "pulse_waveform_screenshot.png"
             filepath = os.path.join(work_dir, filename)
-
-            im = Image.open(io.BytesIO(ds.display_data))
-            im = im.convert("RGB")
-            im.save(filepath, format="png")
-
+            return dapi.screenshot_simple(ds, filepath)
+        if api in ["screenshot_fancy"]:
+            work_dir = hdd_share(args[0])
+            ensure_dir(work_dir)
+            return dapi.screenshot_fancy(ds, *args, work_dir=work_dir, **kwargs)
+        if api == "initial_setup":
+            return dapi.initial_setup(ds)
+        if api == "save_data":
+            work_dir = hdd_share(args[0])
+            ensure_dir(work_dir)
+            return dapi.save_data(ds, *args, work_dir=work_dir, **kwargs)
+        if api == "single_mode":
+            return dapi.single_mode(ds)
+        if api == "test":
+            return dapi.test_main(ds, max_itr=kwargs.get("max_itr", 10))
+        if api == "has_scope_triggered":
+            return dapi.has_scope_triggered(ds)
     except AssertionError as e:
         log("AssertionError (do_work)", e)
-        return e
+        return {"error (server)": str(e)}
     except Exception as e:
         log("Exception (do_work)", e)
-        return e
+        return {"error (server)": str(e)}
 
 
 async def main():
-    spvrc = start_supervisor(topic="jvber/tb0/oscope/cmd", client_id="spvr_tb0_oscope")
+    spvrc = start_supervisor(
+        service_topic="jvber/tb0/oscope",
+        client_id="spvr_tb0_oscope",
+        verbosity_stream="DEBUG",
+        verbosity_log="DEBUG",
+    )
 
     while True:
         try:
             if not spvrc["from"].empty():
                 recv_packet = spvrc["from"].get()
-                log("Main thread recieved packet from Supervisor: ", recv_packet)
+                log(
+                    "Main thread recieved packet from Supervisor: ",
+                    recv_packet,
+                    logger=spvrc["logger"],
+                )
 
                 if "api" in recv_packet:
                     if "args" not in recv_packet:
-                        log("No args found")
+                        log("No args found", logger=spvrc["logger"])
                         recv_packet["args"] = []
                     if "kwargs" not in recv_packet:
-                        log("No kwargs found")
+                        log("No kwargs found", logger=spvrc["logger"])
                         recv_packet["kwargs"] = {}
 
                     result = await do_work(
                         recv_packet["api"],
                         *recv_packet["args"],
+                        logger=spvrc["logger"],
                         **recv_packet["kwargs"],
                     )
                     resp_packet = dict(recv_packet)
                     resp_packet.update({"result": result})
 
                 spvrc["to"].put(resp_packet)
-                log("Main thread sending packet to Supervisor: ", resp_packet)
+                log(
+                    "Main thread sending packet to Supervisor: ",
+                    resp_packet,
+                    logger=spvrc["logger"],
+                )
 
         except Exception as e:
             log("Exception (main)", e)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
