@@ -76,33 +76,31 @@ def screenshot_simple(ds, filepath):
 
 def screenshot_fancy(
     ds,
+    filepath,
     *args,
     sample_time=None,
     overlay_alpha=1,
-    filename=None,
     printable=False,
     verbose=False,
-    work_dir="",
     **kwargs,
 ):
     try:
-        fmt = None
-        if filename:
-            fmt = filename
-        else:
-            fmt = "scope-display_{ts}.png"
-        ts = (
-            sample_time
-            if sample_time
-            else time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-        )
-        filename = fmt.format(ts=ts)
+        # fmt = None
+        # if filename:
+        #     fmt = filename
+        # else:
+        #     fmt = "scope-display_{ts}.png"
+        # ts = (
+        #     sample_time
+        #     if sample_time
+        #     else time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+        # )
+        # filename = fmt.format(ts=ts)
         # need to find out file extension for Pillow on Windows...
-        ext = os.path.splitext(filename)[1]
+        ext = os.path.splitext(filepath)[1]
         if not ext:
             log("Could not detect the image file type extension from the filename")
             return False
-        filepath = os.path.join(work_dir, filename)
         # getting and saving the image
         im = Image.open(io.BytesIO(ds.display_data))
         overlay_filename = pkg_resources.resource_filename(
@@ -134,10 +132,10 @@ def screenshot_fancy(
         return {"error": str(e)}
 
 
-def save_waveform_simple(ds, work_dir, channels):
+def save_waveform_simple(ds, work_dir, filename, channels):
     try:
-        wave_file = os.path.join(*[work_dir, f"pulse_waveforms.csv"])
-        log(f"Writing {len(channels)} waveforms to {work_dir}")
+        wave_file = os.path.join(*[work_dir, filename])
+        log(f"Writing {len(channels)} waveforms to {work_dir}/{filename}")
         with open(
             wave_file,
             mode="w",
@@ -157,25 +155,17 @@ def save_waveform_simple(ds, work_dir, channels):
 
 def save_data(
     ds,
+    work_dir,
+    filename,
     *args,
     sample_time=None,
-    filename=None,
     with_time=True,
     mode="NORMal",
     verbose=False,
-    work_dir="",
     **kwargs,
 ):
     try:
-        ts = (
-            sample_time
-            if sample_time
-            else time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-        )
-        filename = (
-            filename.format(ts=ts) if filename else "scope-data_{ts}.csv".format(ts=ts)
-        )
-        ext = os.path.splitext(filename)[1]
+        ext = os.path.splitext(filename)[-1]
         if not ext:
             log("Could not detect the file type extension from the filename")
             return False
@@ -231,7 +221,7 @@ def single_mode(ds):
         # Wait for scope to change from previous status/mode to single mode
         # If too much time has passed, it could mean the scope triggered immediately after switching to single
         # and we missed the WAIT status.
-        while scope.query(":TRIGger:STATus?") != "WAIT" and time.time() - sent_time < 1:
+        while ds.query(":TRIGger:STATus?") != "WAIT" and time.time() - sent_time < 1:
             pass
     except Exception as e:
         log(e)
@@ -282,5 +272,5 @@ def has_scope_triggered(ds):
 
 
 if __name__ == "__main__":
-    scope = DS1054Z("10.0.1.106")
-    test_main(scope)
+    ds = DS1054Z("10.0.1.106")
+    test_main(ds)

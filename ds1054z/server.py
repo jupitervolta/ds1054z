@@ -3,9 +3,10 @@ import asyncio
 import ds1054z
 import os
 import sys
+import json
 import ds1054z.api as dapi
 from jvframework.supervisor import start_supervisor
-from jvframework.misc import hdd_share, ssd_share, ensure_dir
+from jvframework.misc import hdd_share, ssd_share, ensure_dir, json_decode, chmod
 from PIL import ImageFile
 
 ds = ds1054z.DS1054Z("10.0.1.106")
@@ -50,7 +51,8 @@ async def do_work(api, *args, logger=None, **kwargs):
             """
             Save waveform to file pulse_waveform_{channel}.csv
             args[0]: work_dir
-            args[1:]: CHAN1 CHAN2 CHAN3 CHAN4
+            args[1]: filename
+            args[2:]: CHAN1 CHAN2 CHAN3 CHAN4
             """
             assert (
                 len(args) >= 2
@@ -61,18 +63,24 @@ async def do_work(api, *args, logger=None, **kwargs):
             return dapi.save_waveform_simple(ds, work_dir, channels)
         if api == "trigger_single":
             ds.single()
+        if api in ["trigger_force", "force_trigger"]:
+            ds.tforce()
         if api in ["save_note", "save_notes"]:
             """
             Save a note to a file, simple text file
             args[0]: work_dir
-            args[1]: note
+            args[1]: filename
+            args[2]: note
             """
-            assert len(args) >= 2, "Require text and path arguments for saving note"
+            assert (
+                len(args) >= 3
+            ), "Require (path, filename, text) arguments for saving note"
             work_dir = hdd_share(args[0])
-            ensure_dir(work_dir)
-            note = args[1]
-            note_file = os.path.join(*[work_dir, "note.txt"])
-            log(f"Writing note of length {len(note)} to {work_dir}")
+            ensure_dir(work_dir, 0o777)
+            filename = args[1]
+            note = args[2]
+            note_file = os.path.join(*[work_dir, filename])
+            log(f"Writing note of length {len(note)} to {work_dir}/{filename}")
             with open(
                 note_file,
                 mode="w",
@@ -80,27 +88,59 @@ async def do_work(api, *args, logger=None, **kwargs):
                 log("Opened file for writing:", note_file)
                 f.write(note)
             return True
+        if api == "save_json":
+            """
+            Save a json to a file, simple text file
+            args[0]: work_dir
+            args[1]: filename
+            args[2]: json object
+            """
+            assert (
+                len(args) >= 3
+            ), "Require (path, filename, text) arguments for saving json"
+            work_dir = hdd_share(args[0])
+            ensure_dir(work_dir, 0o777)
+            filename = args[1]
+            js = json_decode(args[2])
+            json_file = os.path.join(*[work_dir, filename])
+            log(f"Writing json of length {len(str(js))} to {work_dir}/{filename}")
+            with open(
+                json_file,
+                mode="w",
+            ) as f:
+                log("Opened file for writing:", json_file)
+                json.dump(js, f, indent=2)
+            return True
         if api in ["screenshot_simple", "screenshot"]:
             """
             Save screenshot to file pulse_waveform_screenshot.png
             args[0]: work_dir
+            args[1]: filename
             """
             # formatting the filename
             work_dir = hdd_share(args[0])
-            ensure_dir(work_dir)
-            filename = "pulse_waveform_screenshot.png"
+            ensure_dir(work_dir, 0o777)
+            filename = args[1]
             filepath = os.path.join(work_dir, filename)
             return dapi.screenshot_simple(ds, filepath)
         if api in ["screenshot_fancy"]:
             work_dir = hdd_share(args[0])
-            ensure_dir(work_dir)
-            return dapi.screenshot_fancy(ds, *args, work_dir=work_dir, **kwargs)
+            ensure_dir(work_dir, 0o777)
+            filename = args[1]
+            filepath = os.path.join(work_dir, filename)
+            return dapi.screenshot_fancy(ds, filepath, *args, **kwargs)
         if api == "initial_setup":
             return dapi.initial_setup(ds)
         if api == "save_data":
+            """
+            Save screenshot to file pulse_waveform_screenshot.png
+            args[0]: work_dir
+            args[1]: filename
+            """
             work_dir = hdd_share(args[0])
-            ensure_dir(work_dir)
-            return dapi.save_data(ds, *args, work_dir=work_dir, **kwargs)
+            filename = args[1]
+            ensure_dir(work_dir, 0o777)
+            return dapi.save_data(ds, work_dir, filename, *args, **kwargs)
         if api == "single_mode":
             return dapi.single_mode(ds)
         if api == "test":
